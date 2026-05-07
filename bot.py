@@ -32,6 +32,8 @@ analyzer = ScamAnalyzer(api_key=os.environ["ANTHROPIC_API_KEY"])
 
 BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 ETHERSCAN_API_KEY = os.getenv("ETHERSCAN_API_KEY", "YourApiKeyToken")
+ADMIN_ID = int(os.environ["ADMIN_ID"])
+DB_PATH = "scam_reports.db"
 
 
 # ─── Команды ────────────────────────────────────────────────────────────────
@@ -52,7 +54,24 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(text, parse_mode="Markdown")
 
+async def backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отправляет SQLite базу админу."""
+    user_id = update.effective_user.id
 
+    if user_id != ADMIN_ID:
+        await update.message.reply_text("⛔ Access denied")
+        return
+
+    try:
+        with open(DB_PATH, "rb") as f:
+            await update.message.reply_document(
+                document=f,
+                filename="scam_reports.db",
+                caption="📦 SQLite backup"
+            )
+    except Exception as e:
+        await update.message.reply_text(f"Ошибка backup: {e}")
+        
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "📖 *Помощь*\n\n"
@@ -361,6 +380,7 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CommandHandler("graph", graph_command))
+    app.add_handler(CommandHandler("backup", backup_command))
     logger.info("🛡 CryptoShield Bot запущен")
     app.run_polling(drop_pending_updates=True)
 
