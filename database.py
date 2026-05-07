@@ -134,7 +134,40 @@ class Database:
                 "SELECT * FROM addresses WHERE address = ?", (address,)
             ).fetchone()
             return dict(row) if row else None
+    def save_related_addresses(self, related_addresses: list):
+        """Сохраняет связанные адреса из on-chain анализа."""
+        with self._connect() as conn:
+            for rel in related_addresses:
+                existing = conn.execute(
+                    "SELECT id, report_count, risk_score FROM addresses WHERE address = ?",
+                    (rel.address,)
+                ).fetchone()
 
+                if existing:
+                    new_count = existing["report_count"] + 1
+                    new_score = max(existing["risk_score"], rel.risk_score)
+
+                    conn.execute("""
+                        UPDATE addresses
+                        SET report_count = ?,
+                            risk_score = ?,
+                            last_seen = datetime('now')
+                        WHERE address = ?
+                    """, (new_count, new_score, rel.address))
+                else:
+                    conn.execute("""
+                        INSERT INTO addresses
+                        (address, network, report_count, risk_score, scam_type)
+                        VALUES (?, ?, ?, ?, ?)
+                    """, (
+                        rel.address,
+                        rel.network,
+                        rel.tx_count,
+                        rel.risk_score,
+                        "related scam wallet"
+                    ))
+
+            conn.commit()
     def confirm_report(self, report_id: int, user_id: int):
         """Пользователь подтверждает что тоже пострадал от этого скама."""
         with self._connect() as conn:
