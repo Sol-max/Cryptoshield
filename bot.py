@@ -8,6 +8,7 @@ import json
 import logging
 import asyncio
 from datetime import datetime
+from chain_tracer import ChainTracer
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
@@ -30,6 +31,7 @@ db = Database("scam_reports.db")
 analyzer = ScamAnalyzer(api_key=os.environ["ANTHROPIC_API_KEY"])
 
 BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
+ETHERSCAN_API_KEY = os.getenv("ETHERSCAN_API_KEY", "YourApiKeyToken")
 
 
 # ─── Команды ────────────────────────────────────────────────────────────────
@@ -164,7 +166,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             original_text=text,
             result=result
         )
+        # On-chain tracing
+        try:
+            async with ChainTracer(ETHERSCAN_API_KEY) as tracer:
+                total_related = 0
 
+                for addr_info in result["addresses"]:
+                    address = addr_info["address"]
+                    network = addr_info.get("network", "Unknown")
+
+                    related = await tracer.trace_all(address, network)
+
+                    if related:
+                        db.save_related_addresses(related)
+                        total_related += len(related)
+
+                logger.info(f"Найдено связанных адресов: {total_related}")
+
+        except Exception as e:
+            logger.warning(f"Ошибка chain tracing: {e}")    
         # Формируем ответ
         response = _format_analysis_result(result, report_id)
         keyboard = _make_report_keyboard(result["addresses"], report_id)
@@ -303,7 +323,31 @@ def _make_report_keyboard(addresses: list, report_id: int):
 
     return InlineKeyboardMarkup(keyboard)
 
+async def graph_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text(
+            "Использование: /graph `адрес`",
+            parse_mode="Markdown"
+        )
+        return
 
+    address = context.args[0].strip()
+    record = db.get_address(address)
+
+    if not record:
+        await update.message.reply_text("Адрес не найден в базе.")
+        return
+
+    text = (
+        f"🕸 *Graph lookup*\n\n"
+        f"`{address}`\n"
+        f"Сеть: {record['network']}\n"
+        f"Risk: {record['risk_score']}/100\n"
+        f"Жалоб: {record['report_count']}\n\n"
+        f"Используй /check для детальной проверки."
+    )
+
+    await update.message.reply_text(text, parse_mode="Markdown")
 # ─── Запуск ──────────────────────────────────────────────────────────────────
 
 def main():
@@ -316,7 +360,7 @@ def main():
     app.add_handler(CommandHandler("check", check_command))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
+    app.add_handler(CommandHandler("graph", graph_command))
     logger.info("🛡 CryptoShield Bot запущен")
     app.run_polling(drop_pending_updates=True)
 
